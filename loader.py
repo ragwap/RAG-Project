@@ -6,7 +6,6 @@ from langchain.document_loaders.pdf import PyPDFDirectoryLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.schema.document import Document
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-# from langchain.evaluation import load_evaluator
 from langchain.vectorstores import Chroma
 from langchain_core.prompts import ChatPromptTemplate
 
@@ -14,82 +13,94 @@ load_dotenv()
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
 PDF_PATH = 'pdfs'
 
-def load_research_docs():
-    doc_loader = PyPDFDirectoryLoader(PDF_PATH)
-    return doc_loader.load()
+class ResearchAssistant():
 
-def split_docs(docs: list[Document]):
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size = 500,
-        chunk_overlap = 100,
-        length_function = len,
-        is_separator_regex=False,
-        separators=["\n\n", "\n", "."]
-    )
+    def load_research_docs(self):
+        doc_loader = PyPDFDirectoryLoader(PDF_PATH)
+        return doc_loader.load()
 
-    res = text_splitter.split_documents(docs)
-    return res
+    def split_docs(self, docs: list[Document]):
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size = 500,
+            chunk_overlap = 100,
+            length_function = len,
+            is_separator_regex=False,
+            separators=["\n\n", "\n", "."]
+        )
 
-def get_embeddings_function():
-    embeddings = OpenAIEmbeddings(model="text-embedding-ada-002", openai_api_key=OPENAI_API_KEY)
-    return embeddings
+        res = text_splitter.split_documents(docs)
+        return res
 
-def create_vectorstore(chunks, embeddings_function, vectorstore_path):
-    ids = [str(uuid.uuid5(uuid.NAMESPACE_DNS, chunk.page_content)) for chunk in chunks]
+    def get_embeddings_function(self):
+        embeddings = OpenAIEmbeddings(model="text-embedding-ada-002", openai_api_key=OPENAI_API_KEY)
+        return embeddings
 
-    unique_ids = set()
-    unique_chunks = []
+    def create_vectorstore(self, chunks, embeddings_function, vectorstore_path):
+        ids = [str(uuid.uuid5(uuid.NAMESPACE_DNS, chunk.page_content)) for chunk in chunks]
 
-    for chunk, id in zip(chunks, ids):
-        if id not in unique_ids:
-            unique_ids.add(id)
-            unique_chunks.append(chunk)
+        unique_ids = set()
+        unique_chunks = []
 
-    vectorstore = Chroma.from_documents(documents=unique_chunks,
-                                        ids=list(unique_ids),
-                                        embedding=embeddings_function,
-                                        persist_directory=vectorstore_path)
-    
-    vectorstore.persist()
+        for chunk, id in zip(chunks, ids):
+            if id not in unique_ids:
+                unique_ids.add(id)
+                unique_chunks.append(chunk)
 
-docs = load_research_docs()
+        vectorstore = Chroma.from_documents(documents=unique_chunks,
+                                            ids=list(unique_ids),
+                                            embedding=embeddings_function,
+                                            persist_directory=vectorstore_path)
+        
+        vectorstore.persist()
 
-chunks = split_docs(docs)
+if __name__ == "__main__":
 
-embeddings_function = get_embeddings_function()
+    research_assistant = ResearchAssistant()
 
-create_vectorstore(chunks, embeddings_function, vectorstore_path="vectorstore_chroma")
+    docs = research_assistant.load_research_docs()
 
-vectorstore = Chroma(persist_directory="vectorstore_chroma", embedding_function=embeddings_function)
+    chunks = research_assistant.split_docs(docs)
 
-retriever = vectorstore.as_retriever(search_type="similarity")
-question = "What is Retrieval Augmented Generation?"
-similar_chunks = retriever.invoke(question)
+    embeddings_function = research_assistant.get_embeddings_function()
 
+    research_assistant.create_vectorstore(chunks, embeddings_function, vectorstore_path="vectorstore_chroma")
 
-PROMPT_TEMPLATE = """
-You are an assistant that has knowledge on research papers who will be answering related questions. 
-Use the following chunks retrived from the context to answer the questions. If something is asked out of the context, 
-use your pre-trained knowledge to answer.
+    vectorstore = Chroma(persist_directory="vectorstore_chroma", embedding_function=embeddings_function)
 
-{context}
+    retriever = vectorstore.as_retriever(search_type="similarity")
 
-----
+    try:
+        while True:
+            # question = "What are the contexts you are aware about?"
+            print('#' * 200)
+            question = input("Ask me something: ")
+            similar_chunks = retriever.invoke(question)
 
-Answer the question based on the above context: {question}
-"""
-
-context = "\n\n---\n\n".join([doc.page_content for doc in similar_chunks])
-
-prompt_template = ChatPromptTemplate.from_template(PROMPT_TEMPLATE)
-prompt = prompt_template.format(context=context, question=question)
+            context = "\n\n---\n\n".join([doc.page_content for doc in similar_chunks])
 
 
-llm = ChatOpenAI(model="gpt-4o-mini", api_key=OPENAI_API_KEY)
-answer = llm.invoke(prompt)
+            PROMPT_TEMPLATE = """
+            You are an assistant that has knowledge on research papers who will be answering related questions. 
+            Use the following chunks retreived from the context to answer the questions. If something is asked out of the context, 
+            use your pre-trained knowledge to answer. For anything that you have not retreived from the context or that you are trained on, DO NOT MAKE UP ANSWERS.
 
-print('#' * 200)
-print('\n')
-print(answer.content)
+            {context}
 
-# evaluator = load_evaluator(evaluator="embedding_distance", embeddings=embeddings_function)
+            ----
+
+            Answer the question based on the above context: {question}
+            """
+
+            prompt_template = ChatPromptTemplate.from_template(PROMPT_TEMPLATE)
+            prompt = prompt_template.format(context=context, question=question)
+
+
+            llm = ChatOpenAI(model="gpt-4o-mini", api_key=OPENAI_API_KEY)
+            answer = llm.invoke(prompt)
+
+            print('#' * 200)
+            print('\n')
+            print(answer.content)
+
+    except(KeyboardInterrupt):
+        print("\n\nTerminating gracefully.")
